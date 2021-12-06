@@ -9,6 +9,7 @@ function extendProblemPage() {
   );
 
   const storageTimerList = 'problem-timers';
+  const storageTimerRecordList = 'problem-timer-records';
 
   const container = document
     .getElementsByClassName('content')[0]
@@ -19,6 +20,8 @@ function extendProblemPage() {
   const dropdown = createTimerDropdown();
   menu.appendChild(dropdown);
 
+  const recordDropdown = createTimerRecordDropdown();
+  menu.appendChild(recordDropdown);
   // the number of questions
   const searchMenu = document.querySelector(
     'ul.problem-menu li a[href^="/board/search/"]'
@@ -40,11 +43,71 @@ function extendProblemPage() {
       }
     );
   }
+  function createTimerRecordDropdown(){
+    const li = Utils.createElement('li', {
+      id: 'problem-timer-record',
+      class: 'dropdown',
+    });
+    const a = Utils.createElement('a', {
+      class: 'dropdown-toggle',
+      style: 'cursor: pointer',
+    });
+    a.innerHTML = '기록<b class="caret"></b>';
+    a.addEventListener('click', (evt) => {
+      li.classList.toggle('open');
+    });
+    li.appendChild(a);
 
-  function stopTimer() {
+    const form = Utils.createElement('form', { 
+      class: 'dropdown-menu',
+      style: 'width: 200px'
+    });
+    Config.load(storageTimerRecordList, (list) => {
+        console.log(list);
+        const problemRecords = list ? list[pid] : undefined;
+        if (problemRecords) {
+          problemRecords.forEach((element) => {
+            const p = Utils.createElement('p', { 
+              class: 'p',
+              style: 'padding-left: 5px',
+            });
+            p.innerText = element;
+            form.appendChild(p);
+
+            console.log(element);
+          });
+        } else {
+          // empty
+          const p = Utils.createElement('p', { 
+            class: 'p',
+            style: 'padding-left: 5%',
+          });
+          form.setAttribute('style', 'width: 300px'); // 줄 바꿈 일어남 방지
+          p.innerText = '타이머 종료시 경과된 시간이 저장됩니다!';
+          form.appendChild(p);
+        }
+    });
+    
+    li.appendChild(form);
+    return li;
+  }
+  function stopTimer(passedTime) {
     // TODO: 옵션에서 메시지 설정
     window.alert('종료되었습니다.');
     // TODO: 기록 남기기
+    const dt = new Date();
+    const today = dt.getFullYear()+'-'+(dt.getMonth()+1)+'-'+dt.getDate();
+    console.log(today+': '+passedTime);
+    
+    Config.load(storageTimerRecordList, (list) => {
+      list = list || {};
+      list[pid] = list[pid] || [];
+      list[pid].push(today+': '+passedTime);
+      Config.save(storageTimerRecordList, list, (result) => {
+        console.log('record list updated', result);
+      });
+    });
+    
     progress.stop();
     // progress.hide();
   }
@@ -91,13 +154,15 @@ function extendProblemPage() {
             list[pid] = { startTime: startTime, endTime: endTime };
             Config.save(storageTimerList, list, (result) => {
               progress.show();
-              progress.start(startTime, endTime);
+              progress.start(startTime, endTime, stopTimer);
               console.log('list updated', result);
             });
           });
         }
       } else {
         // timer stop
+        console.log('설마이종료랑 저종료랑 다른가');
+
         button.innerText = '시작';
         button.classList.add('btn-primary');
         button.classList.remove('btn-danger');

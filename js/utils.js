@@ -161,7 +161,7 @@ function progressTimer() {
         updateProgress.bind(null, startTime, endTime, callback)
       );
     } else {
-      callback();
+      callback(timeHumanize(passedTime));
     }
   }
 
