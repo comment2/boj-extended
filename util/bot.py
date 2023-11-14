@@ -1,66 +1,120 @@
 from time import sleep
 from random import randint
-from selenium import webdriver
-from selenium.webdriver.common.by import By
 from datetime import datetime
-import sys
-import requests
+
+import os
 import json
+import requests
+import logging
 
-try:
-    options = webdriver.ChromeOptions()
-    options.add_argument('--lang=ko_KR')
-    options.add_argument('--headless')
-    options.add_argument('--window-size=1920x1080')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--no-sandbox')
 
-    # chrome driver
-    driver = webdriver.Chrome('chromedriver', options=options)
-    driver.implicitly_wait(3)
-    assert driver is not None
-    
-    # access BOJ
-    driver.get('https://www.acmicpc.net/problemset')
+INTERVAL = 100
+API_HOST = 'https://solved.ac/api/v3'
 
-    pages = len(driver.find_element_by_class_name('pagination').find_elements_by_tag_name('li'))
-    print('total pages:', pages)
-    
-    problems = {}
-    l = -1
-    for page in range(pages):
-        logging = l != page * 10 // pages
-        if logging:
-            per = '{:.2f}%'.format(100 * page / pages)
-            print(f'\n{page} page ({per})', '=' * (30 - len(per)))
-            l = page * 10 // pages
-        driver.get('https://www.acmicpc.net/problemset/{}'.format(page + 1))
-        table = driver.find_element(By.ID, 'problemset')
-        rows = table.find_elements_by_tag_name('tr')[1:]
-        l2 = 0
-        for row in rows:
-            pid, name = row.find_elements_by_tag_name('td')[:2]
-            problems[pid.text] = name.text
-            if logging and l2 < 5:
-                print(f'{pid.text} {name.text}')
-                l2 += 1
-        if logging and l2 != len(rows):
-            print('...')
-        # sleep randomly [500ms, 1000ms]
-        sleep(randint(500, 1000) / 1000)
-    
-    # export json as file
-    with open('db.json', 'w') as f:
-        db = {
-            'problems': problems,
-            'last_updated': str(datetime.now())
-        }
-        json.dump(db, f, ensure_ascii=False, indent=2, separators=(',', ': '))
 
-except Exception as e:
-    print(e)
-    driver.quit()
-    sys.exit(str(e))
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-finally:
-    driver.quit()
+formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+
+
+def sleep_rand(min_ms, max_ms):
+    sleep(randint(min_ms, max_ms) / 1000)
+
+
+def get_problems_count():
+    res = requests.get(f'{API_HOST}/site/stats').json()
+    return res['problemCount']
+
+
+def get_problem_details(ids):
+    pids = '%2C'.join(list(map(str, ids)))
+    try:
+        for err in range(5):
+            response = requests.get(f'{API_HOST}/problem/lookup?problemIds={pids}')
+            status_code = response.status_code
+            if status_code == 429:
+                logger.info('[Awating next retry....]')
+                sleep(5 * 60)
+                continue
+            else:
+                return response.json()
+        return None
+    except Exception as err:
+        logger.error(err)
+        return None
+
+
+def is_time_over(start_date):
+    return (datetime.now() - start_date).seconds / 3600 > 1.5
+
+total_count = get_problems_count()
+count = 0
+offset = 1000
+problems = {}
+prev_count = -10 ** 10
+start_date = datetime.now()
+total_tries = max(5, int(total_count / INTERVAL * 1.2))
+
+logger.info(f'total problems: {total_count}')
+logger.info(f'total tries: {total_tries}')
+
+for tries in range(total_tries):
+    if is_time_over(start_date):
+        logger.error('It takes too long')
+        exit(1)
+
+    rows = get_problem_details(range(offset, offset + INTERVAL))
+
+    if rows == None:
+        exit(1)
+
+    rows_count = len(rows)
+    count += rows_count
+
+    is_last = count >= total_count
+    is_print = is_last or (count - prev_count > (total_count // 20))
+
+    if is_print:
+        logger.info('=' * 80 + '\n')
+        logger.info('# Collect {} items ... ({:.2f}%)\n'.format(
+            count, count / total_count * 100)
+        )
+
+    result = {}
+    for i, row in enumerate(rows):
+        pid = int(row['problemId'])
+        title = row['titleKo']
+        result[pid] = dict(
+          title=title,
+          level=row['level']
+        )
+        if is_print:
+            if i < 5 or rows_count - 5 <= i:
+                logger.info(f'{pid} {title}')
+            elif i == 5:
+                logger.info('...')
+
+    problems.update(result)
+
+    if is_last:
+        break
+
+    if is_print:
+        prev_count = count
+
+    offset += INTERVAL
+    sleep_rand(100, 1000)
+
+
+with open(os.path.join('db', 'v1.1.json'), 'w', encoding='utf-8') as f:
+    db = {
+        'version': '1.1.0',
+        'last_updated': str(datetime.now()),
+        'problems': problems
+    }
+    json.dump(db, f, ensure_ascii=False, indent=2, separators=(',', ': '))
